@@ -1,12 +1,10 @@
 import pandas as pd
 import numpy as np
-import requests
-import zlib
-import os
-import shelve
-import magic #pip install python-magic
+import requests, zlib, os, shelve, magic
 from multiprocessing import Pool
 from tqdm import tqdm
+import os.path as osp
+
 
 headers = {
     #'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36',
@@ -14,10 +12,12 @@ headers = {
     'X-Forwarded-For': '64.18.15.200'
 }
 
+
 def _df_split_apply(tup_arg):
     split_ind, subset, func = tup_arg
     r = subset.apply(func, axis=1)
     return (split_ind, r)
+
 
 def df_multiprocess(df, processes, chunk_size, func, dataset_name):
     print("Generating parts...")
@@ -43,9 +43,11 @@ def df_multiprocess(df, processes, chunk_size, func, dataset_name):
     print("Finished Downloading.")
     return
 
+
 # Unique name based on url
 def _file_name(row):
     return "%s/%s_%s" % (row['folder'], row.name, (zlib.crc32(row['url'].encode('utf-8')) & 0xffffffff))
+
 
 # For checking mimetypes separately without download
 def check_mimetype(row):
@@ -53,6 +55,7 @@ def check_mimetype(row):
         row['mimetype'] = magic.from_file(row['file'], mime=True)
         row['size'] = os.stat(row['file']).st_size
     return row
+
 
 # Don't download image, just check with a HEAD request, can't resume.
 # Can use this instead of download_image to get HTTP status codes.
@@ -70,6 +73,7 @@ def check_download(row):
     if response.ok:
         row['file'] = fname
     return row
+
 
 def download_image(row):
     fname = _file_name(row)
@@ -106,13 +110,28 @@ def download_image(row):
         row['file'] = fname
     return row
 
+
 def open_tsv(fname, folder):
     print("Opening %s Data File..." % fname)
-    df = pd.read_csv(fname, sep='\t', names=["caption","url"], usecols=range(1,2))
+    df = pd.read_csv(fname, sep='\t', names=["url", "caption"])
     df['folder'] = folder
     print("Processing", len(df), " Images:")
+
+    # subset = []
+    # i = 0
+    # for index, row in df.iterrows():
+    #     print(_file_name(row))
+    #     subset.append('%s\t%s'%(row['url'], row['caption']))
+    #     i += 1
+    #     if i > 10:
+    #         break
+
+    # with open('subset.tsv', 'w') as f:
+    #     f.write('\n'.join(subset))
+
     return df
 
+    
 def df_from_shelve(chunk_size, func, dataset_name):
     print("Generating Dataframe from results...")
     with shelve.open('%s_%s_%s_results.tmp' % (dataset_name, func.__name__, chunk_size)) as results:
@@ -120,21 +139,16 @@ def df_from_shelve(chunk_size, func, dataset_name):
         df = pd.concat([results[str(k)][1] for k in keylist], sort=True)
     return df
 
+
 # number of processes in the pool can be larger than cores
 num_processes = 32
 # chunk_size is how many images per chunk per process - changing this resets progress when restarting.
 images_per_part = 100
 
-data_name = "validation"
-df = open_tsv("Validation_GCC-1.1.0-Validation.tsv", data_name)
+
+data_name = "cc12m"
+df = open_tsv("subset.tsv", data_name)
 df_multiprocess(df=df, processes=num_processes, chunk_size=images_per_part, func=download_image, dataset_name=data_name)
 df = df_from_shelve(chunk_size=images_per_part, func=download_image, dataset_name=data_name)
 df.to_csv("downloaded_%s_report.tsv.gz" % data_name, compression='gzip', sep='\t', header=False, index=False)
 print("Saved.")
-
-# data_name = "training"
-# df = open_tsv("Train_GCC-training.tsv",data_name)
-# df_multiprocess(df=df, processes=num_processes, chunk_size=images_per_part, func=download_image, dataset_name=data_name)
-# df = df_from_shelve(chunk_size=images_per_part, func=download_image, dataset_name=data_name)
-# df.to_csv("downloaded_%s_report.tsv.gz" % data_name, compression='gzip', sep='\t', header=False, index=False)
-# print("Saved.")
